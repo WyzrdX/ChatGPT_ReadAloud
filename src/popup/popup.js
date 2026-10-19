@@ -4,6 +4,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusMessage = document.getElementById('statusMessage');
   const settings = [
     {
+      element: document.getElementById('diagnosticsToggle'),
+      key: 'diagnosticsEnabled',
+      defaultValue: false,
+    },
+    {
       element: document.getElementById('autoPlayToggle'),
       key: 'autoPlayEnabled',
       defaultValue: false,
