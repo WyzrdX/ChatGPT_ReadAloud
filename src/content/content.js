@@ -1,380 +1,220 @@
 (function () {
-  "use strict";
+  'use strict';
 
-  const readAloudSVG = '<path d="M9.75122 4.09203C9.75122 3.61482 9.21964 3.35044 8.84399 3.60277L8.77173 3.66039L6.55396 5.69262C6.05931 6.14604 5.43173 6.42255 4.7688 6.48461L4.48267 6.49828C3.52474 6.49851 2.74829 7.27565 2.74829 8.23363V11.7668C2.74829 12.7248 3.52474 13.501 4.48267 13.5012C5.24935 13.5012 5.98874 13.7889 6.55396 14.3069L8.77173 16.3401L8.84399 16.3967C9.21966 16.6493 9.75122 16.3858 9.75122 15.9084V4.09203ZM17.2483 10.0002C17.2483 8.67623 16.9128 7.43233 16.3235 6.34691L17.4924 5.71215C18.1849 6.9875 18.5784 8.4491 18.5784 10.0002C18.5783 11.5143 18.2033 12.9429 17.5413 14.1965C17.3697 14.5212 16.9675 14.6453 16.6428 14.4739C16.3182 14.3023 16.194 13.9001 16.3655 13.5754C16.9288 12.5086 17.2483 11.2927 17.2483 10.0002ZM13.9182 10.0002C13.9182 9.1174 13.6268 8.30445 13.135 7.64965L14.1985 6.85082C14.8574 7.72804 15.2483 8.81952 15.2483 10.0002L15.2336 10.3938C15.166 11.3044 14.8657 12.1515 14.3918 12.8743L14.3069 12.9797C14.0889 13.199 13.7396 13.2418 13.4709 13.0657C13.164 12.8643 13.0784 12.4528 13.2795 12.1457L13.4231 11.9084C13.6935 11.4246 13.8643 10.8776 13.9075 10.2942L13.9182 10.0002ZM13.2678 6.71801C13.5615 6.49772 13.978 6.55727 14.1985 6.85082L13.135 7.64965C12.9144 7.35599 12.9742 6.93858 13.2678 6.71801ZM16.5911 5.44555C16.9138 5.27033 17.3171 5.38949 17.4924 5.71215L16.3235 6.34691C16.1483 6.02419 16.2684 5.62081 16.5911 5.44555ZM11.0813 15.9084C11.0813 17.5226 9.22237 18.3912 7.9895 17.4202L7.87231 17.3205L5.65552 15.2873C5.33557 14.9941 4.91667 14.8313 4.48267 14.8313C2.7902 14.8311 1.41821 13.4594 1.41821 11.7668V8.23363C1.41821 6.54111 2.7902 5.16843 4.48267 5.1682L4.64478 5.16039C5.02003 5.12526 5.37552 4.96881 5.65552 4.71215L7.87231 2.67992L7.9895 2.58031C9.22237 1.60902 11.0813 2.47773 11.0813 4.09203V15.9084Z"></path>';
-  const stopSVG = '<path d="M10 2.08496C14.3713 2.08496 17.915 5.62867 17.915 10C17.915 14.3713 14.3713 17.915 10 17.915C5.62867 17.915 2.08496 14.3713 2.08496 10C2.08496 5.62867 5.62867 2.08496 10 2.08496ZM8.25 7.25C7.69772 7.25 7.25 7.69772 7.25 8.25V11.75C7.25 12.3023 7.69772 12.75 8.25 12.75H11.75C12.3023 12.75 12.75 12.3023 12.75 11.75V8.25C12.75 7.69772 12.3023 7.25 11.75 7.25H8.25Z"></path>';
-  const pauseSVG = '<path d="M10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM9 13H7V7H9V13ZM13 13H11V7H13V13Z"></path>';
+  // Verified on the signed-in ChatGPT interface, 2026-10-19. Do not fall
+  // back to More actions: that menu now contains Branch conversation.
+  const TURN = '[data-turn-key]';
+  const SPEAKER = 'button[aria-label="Read aloud"]';
+  const PLAYBACK = 'button[aria-label="Read aloud"], button[aria-label="Loading audio…"]';
+  const SEND = 'button[aria-label="Send"], button[aria-label="Send message"], button[data-testid="send-button"]';
+  const STOP_GENERATING = 'button[aria-label="Stop"], button[aria-label="Stop generating"], button[data-testid="stop-button"]';
   const STORAGE_KEY = 'autoPlayEnabled';
-  const HIDE_FEEDBACK_STORAGE_KEY = 'hideFeedbackButtonsEnabled';
-  const hasStorage = typeof chrome !== 'undefined' && chrome?.storage?.sync;
+  const FEEDBACK_KEY = 'hideFeedbackButtonsEnabled';
+  const storage = typeof chrome !== 'undefined' ? chrome.storage?.sync : null;
   let autoPlayEnabled = false;
-  let autoPlayArmedForNewResponses = false;
-  let hideFeedbackButtonsEnabled = false;
+  let hideFeedbackEnabled = false;
+  let pending = null;
+  let route = location.pathname;
+  let scanTimer;
+  const mediaInUse = new Set();
+  const hiddenFeedback = new Map();
 
-  function hideFeedbackButtons() {
-    if (!hideFeedbackButtonsEnabled) {
-      return;
-    }
-
-    const goodResponseButtons = document.querySelectorAll('button[aria-label="Good response"]');
-    const badResponseButtons = document.querySelectorAll('button[aria-label="Bad response"]');
-
-    goodResponseButtons.forEach((button) => {
-      button.dataset.readAloudFeedbackHidden = 'true';
-      button.style.display = 'none';
-    });
-    badResponseButtons.forEach((button) => {
-      button.dataset.readAloudFeedbackHidden = 'true';
-      button.style.display = 'none';
-    });
+  function enabled(button) {
+    return button && !button.disabled && button.getAttribute('aria-disabled') !== 'true';
   }
 
-  function restoreFeedbackButtons() {
-    const hiddenFeedbackButtons = document.querySelectorAll('button[data-read-aloud-feedback-hidden="true"]');
-    hiddenFeedbackButtons.forEach((button) => {
-      button.style.removeProperty('display');
-      delete button.dataset.readAloudFeedbackHidden;
-    });
+  function turns() {
+    return Array.from(document.querySelectorAll(TURN));
   }
 
-  function setHideFeedbackButtonsEnabled(value) {
-    hideFeedbackButtonsEnabled = Boolean(value);
-    if (hideFeedbackButtonsEnabled) {
-      hideFeedbackButtons();
-    } else {
-      restoreFeedbackButtons();
-    }
+  function generating() {
+    return Boolean(document.querySelector(STOP_GENERATING));
   }
 
-  function triggerAutoPlayForButton(proxyButton) {
-    if (
-      !autoPlayEnabled ||
-      !proxyButton ||
-      proxyButton.dataset.autoPlayTriggered === 'true' ||
-      proxyButton.dataset.autoPlayEligible !== 'true'
-    ) {
-      return;
-    }
+  function cancelPending() {
+    pending = null;
+  }
 
-    if (proxyButton.getAttribute('aria-label') !== 'Read Aloud') {
-      return;
-    }
-
-    proxyButton.dataset.autoPlayTriggered = 'true';
-    autoPlayArmedForNewResponses = false;
-
-    setTimeout(() => {
-      if (proxyButton.isConnected && autoPlayEnabled) {
-        proxyButton.click();
+  function updateFeedback() {
+    if (!hideFeedbackEnabled) {
+      for (const [button, display] of hiddenFeedback) {
+        if (display.value) button.style.setProperty('display', display.value, display.priority);
+        else button.style.removeProperty('display');
       }
-    }, 100);
-  }
-
-  function triggerAutoPlayForExisting() {
-    if (!autoPlayEnabled) {
+      hiddenFeedback.clear();
       return;
     }
-
-    const proxyButtons = document.querySelectorAll('button[data-read-aloud-proxy="true"]');
-    for (const button of proxyButtons) {
-      if (
-        button.dataset.autoPlayTriggered !== 'true' &&
-        button.dataset.autoPlayEligible === 'true' &&
-        button.getAttribute('aria-label') === 'Read Aloud'
-      ) {
-        triggerAutoPlayForButton(button);
-        break;
+    for (const button of document.querySelectorAll('button[aria-label="Good response"], button[aria-label="Bad response"]')) {
+      if (!hiddenFeedback.has(button)) {
+        hiddenFeedback.set(button, {
+          value: button.style.getPropertyValue('display'),
+          priority: button.style.getPropertyPriority('display'),
+        });
+        button.style.setProperty('display', 'none');
       }
     }
-  }
-
-  function resetProxyButtonAppearance(button) {
-    if (!button) {
-      return;
-    }
-    button.setAttribute('aria-label', 'Read Aloud');
-    button.dataset.autoPlayTriggered = 'false';
-    button.dataset.autoPlayEligible = 'false';
-    const icon = button.querySelector('svg');
-    if (icon) {
-      icon.innerHTML = readAloudSVG;
-    }
-  }
-
-  function resetAllProxyButtons() {
-    const proxyButtons = document.querySelectorAll('button[data-read-aloud-proxy="true"]');
-    for (const button of proxyButtons) {
-      resetProxyButtonAppearance(button);
+    for (const button of hiddenFeedback.keys()) {
+      if (!button.isConnected) hiddenFeedback.delete(button);
     }
   }
 
   function setAutoPlayEnabled(value) {
-    autoPlayEnabled = Boolean(value);
-    if (autoPlayEnabled) {
-      if (typeof requestIdleCallback === 'function') {
-        requestIdleCallback(triggerAutoPlayForExisting, { timeout: 500 });
-      } else {
-        setTimeout(triggerAutoPlayForExisting, 200);
-      }
-    }
+    const next = Boolean(value);
+    // Enabling is prospective; never replay a reply that completed while off.
+    if (next !== autoPlayEnabled) cancelPending();
+    autoPlayEnabled = next;
   }
 
-  function initializeAutoPlaySetting() {
-    if (!hasStorage) {
-      autoPlayEnabled = false;
+  function arm() {
+    if (!autoPlayEnabled || generating()) return;
+    pending = {
+      baseline: new Set(turns().map(turn => turn.getAttribute('data-turn-key'))),
+      key: null,
+      expires: Date.now() + 15000,
+    };
+    route = location.pathname;
+    scheduleScan();
+  }
+
+  function playbackInUse() {
+    return mediaInUse.size > 0 || Boolean(document.querySelector(
+      'button[aria-label="Read aloud"][aria-pressed="true"], button[aria-label="Loading audio…"]'
+    )) || Array.from(document.querySelectorAll('audio')).some(audio => !audio.paused && !audio.ended);
+  }
+
+  function scan() {
+    scanTimer = undefined;
+    updateFeedback();
+    const currentTurns = turns();
+    if (location.pathname !== route) {
+      // Sending from New chat creates a route, sometimes via a local-chatgpt
+      // route first. All other navigation cancels the old request.
+      const newChat = pending && pending.baseline.size === 0 && !route.includes('/c/');
+      const localCommit = pending && route.includes('/c/local-chatgpt') &&
+        currentTurns.some(turn => turn.getAttribute('data-turn-key') === pending.key);
+      if (!newChat && !localCommit) cancelPending();
+      route = location.pathname;
+    }
+    if (!autoPlayEnabled || !pending) return;
+    if (Date.now() > pending.expires) {
+      cancelPending();
       return;
     }
-
-    chrome.storage.sync.get({ [STORAGE_KEY]: false, [HIDE_FEEDBACK_STORAGE_KEY]: false }, (result) => {
-      setAutoPlayEnabled(result[STORAGE_KEY]);
-      setHideFeedbackButtonsEnabled(result[HIDE_FEEDBACK_STORAGE_KEY]);
-    });
-
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === 'sync' && Object.prototype.hasOwnProperty.call(changes, STORAGE_KEY)) {
-        setAutoPlayEnabled(changes[STORAGE_KEY].newValue);
-      }
-
-      if (areaName === 'sync' && Object.prototype.hasOwnProperty.call(changes, HIDE_FEEDBACK_STORAGE_KEY)) {
-        setHideFeedbackButtonsEnabled(changes[HIDE_FEEDBACK_STORAGE_KEY].newValue);
-      }
-    });
-  }
-
-  function isInComposer(target) {
-    if (!(target instanceof Element)) {
-      return false;
+    if (!pending.key) {
+      // Require evidence of a live generation and a new user turn without
+      // playback controls. A historical completed turn cannot qualify merely
+      // because virtualization mounted it after Send was pressed.
+      if (!generating()) return;
+      const latest = currentTurns.at(-1);
+      const key = latest?.getAttribute('data-turn-key');
+      if (!key || pending.baseline.has(key) ||
+          !latest.querySelector('[data-user-message-bubble]') || latest.querySelector(PLAYBACK)) return;
+      pending.key = key;
+      pending.expires = Date.now() + 10 * 60 * 1000;
     }
-
-    return Boolean(target.closest('textarea, [contenteditable="true"]'));
+    const turn = currentTurns.find(item => item.getAttribute('data-turn-key') === pending.key);
+    // Temporarily unmounted turns may return; never substitute a different one.
+    if (!turn || generating()) return;
+    const complete = turn.querySelector('[data-talvt-turn-state="complete"]');
+    if (!complete?.querySelector('[data-conversation-role="assistant"]')) return;
+    const speaker = complete.querySelector(SPEAKER);
+    if (!enabled(speaker) || speaker.getAttribute('aria-pressed') === 'true') return;
+    // Consume before clicking, including failures/overlap: retries could undo
+    // a manual pause, restart a stopped reply, or interrupt existing narration.
+    cancelPending();
+    if (document.visibilityState !== 'visible' || playbackInUse()) return;
+    speaker.click();
   }
 
-  function isSendButton(target) {
-    if (!(target instanceof Element)) {
-      return false;
+  function scheduleScan() {
+    // Throttle rather than debounce so streaming mutations cannot starve scans.
+    if (scanTimer === undefined) scanTimer = setTimeout(scan, 50);
+  }
+
+  function buttonFrom(event) {
+    return event.target instanceof Element ? event.target.closest('button') : null;
+  }
+
+  document.addEventListener('click', event => {
+    const button = buttonFrom(event);
+    if (!button) return;
+    if (button.matches(SEND) && enabled(button)) {
+      arm();
+      return;
     }
+    cancelForManualControl(button);
+  }, true);
 
-    const sendButton = target.closest('button[aria-label*="Send"], button[data-testid*="send"]');
-    return Boolean(sendButton && !sendButton.disabled && sendButton.getAttribute('aria-disabled') !== 'true');
-  }
-
-  function armAutoPlayForNewResponses() {
-    autoPlayArmedForNewResponses = true;
-  }
-
-  function temporarilyHideMenu() {
-    const menu = document.querySelector('div[role="menu"]');
-    if (!menu || menu.dataset.proxyMenuHidden === 'true') {
-      return null;
-    }
-
-    const recordedStyles = {
-      opacity: {
-        value: menu.style.getPropertyValue('opacity'),
-        priority: menu.style.getPropertyPriority('opacity'),
-      },
-      pointerEvents: {
-        value: menu.style.getPropertyValue('pointer-events'),
-        priority: menu.style.getPropertyPriority('pointer-events'),
-      },
-      transform: {
-        value: menu.style.getPropertyValue('transform'),
-        priority: menu.style.getPropertyPriority('transform'),
-      },
-    };
-
-    menu.dataset.proxyMenuHidden = 'true';
-    menu.style.setProperty('opacity', '0', 'important');
-    menu.style.setProperty('pointer-events', 'none', 'important');
-    menu.style.setProperty('transform', 'translate(-9999px, -9999px)', 'important');
-
-    return () => {
-      if (!menu.isConnected) {
-        delete menu.dataset.proxyMenuHidden;
-        return;
-      }
-
-      const restoreProperty = (property, record) => {
-        if (record.value) {
-          menu.style.setProperty(property, record.value, record.priority || '');
-        } else {
-          menu.style.removeProperty(property);
-        }
-      };
-
-      restoreProperty('opacity', recordedStyles.opacity);
-      restoreProperty('pointer-events', recordedStyles.pointerEvents);
-      restoreProperty('transform', recordedStyles.transform);
-      delete menu.dataset.proxyMenuHidden;
-    };
-  }
-
-  function createProxyButton() {
-    const moreActionsButtons = document.querySelectorAll('button[aria-label="More actions"]:not([data-proxy-added])');
-
-    for (const moreActionsButton of moreActionsButtons) {
-      moreActionsButton.dataset.proxyAdded = 'true';
-
-      const container = moreActionsButton.parentElement;
-      if (!container) continue;
-      const proxyButton = moreActionsButton.cloneNode(true);
-      proxyButton.setAttribute('aria-label', 'Read Aloud');
-      proxyButton.dataset.readAloudProxy = 'true';
-      proxyButton.dataset.autoPlayTriggered = 'false';
-      proxyButton.dataset.autoPlayEligible = autoPlayArmedForNewResponses ? 'true' : 'false';
-      
-      const icon = proxyButton.querySelector('svg');
-      if (icon) {
-        icon.innerHTML = readAloudSVG;
-      }
-
-      (function(specificMoreActionsButton) {
-        proxyButton.addEventListener('click', (event) => {
-          event.stopPropagation();
-
-          const currentState = proxyButton.getAttribute('aria-label');
-          let restoreMenuStyles = null;
-
-          const openMenu = () => {
-            specificMoreActionsButton.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
-            specificMoreActionsButton.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
-          };
-
-          const scheduleMenuHide = () => {
-            if (!restoreMenuStyles) {
-              const restore = temporarilyHideMenu();
-              if (typeof restore === 'function') {
-                restoreMenuStyles = restore;
-              }
-            }
-          };
-
-          const runRestoreMenu = () => {
-            if (restoreMenuStyles) {
-              restoreMenuStyles();
-              restoreMenuStyles = null;
-            }
-          };
-
-          if (currentState === 'Read Aloud') {
-            openMenu();
-            
-            requestAnimationFrame(() => {
-              scheduleMenuHide();
-              setTimeout(scheduleMenuHide, 50);
-            });
-
-            const clickReadAloudWhenReady = (attemptsRemaining) => {
-              scheduleMenuHide();
-              // Old selector kept for rollback reference; clicking "Loading" can mark playback as stopped/started incorrectly.
-              // const realReadAloudButton = document.querySelector('div[role="menuitem"][aria-label="Read aloud"], div[role="menuitem"][aria-label="Loading"]');
-              const realReadAloudButton = document.querySelector('div[role="menuitem"][aria-label="Read aloud"]');
-              if (realReadAloudButton) {
-                realReadAloudButton.click();
-                proxyButton.setAttribute('aria-label', 'Stop');
-                const icon = proxyButton.querySelector('svg');
-                if (icon) {
-                  icon.innerHTML = stopSVG;
-                }
-                openMenu();
-                setTimeout(runRestoreMenu, 100);
-              } else {
-                if (attemptsRemaining > 0) {
-                  setTimeout(() => clickReadAloudWhenReady(attemptsRemaining - 1), 200);
-                } else {
-                  runRestoreMenu();
-                }
-              }
-            };
-
-            setTimeout(() => clickReadAloudWhenReady(5), 300);
-          } else {
-            openMenu();
-            
-            requestAnimationFrame(() => {
-              scheduleMenuHide();
-              setTimeout(scheduleMenuHide, 50);
-            });
-
-            setTimeout(() => {
-              scheduleMenuHide();
-              const stopButton = document.querySelector('div[role="menuitem"][aria-label="Stop"]');
-              if (stopButton) {
-                stopButton.click();
-                resetProxyButtonAppearance(proxyButton);
-                proxyButton.dataset.autoPlayEligible = 'false';
-                openMenu();
-                setTimeout(runRestoreMenu, 100);
-              } else {
-                runRestoreMenu();
-              }
-            }, 300);
-          }
-        });
-      })(moreActionsButton);
-
-      if (autoPlayEnabled) {
-        setTimeout(() => triggerAutoPlayForButton(proxyButton), 0);
-      }
-
-      moreActionsButton.before(proxyButton);
+  function cancelForManualControl(button) {
+    if (!button) return;
+    const label = button.getAttribute('aria-label') || '';
+    if (button.matches(STOP_GENERATING) || button.matches(PLAYBACK) ||
+        /^(Pause|Resume|Play|Stop reading|Stop playback|Pause audio|Resume audio|Close player|Close audio player)$/i.test(label)) {
+      cancelPending();
     }
   }
 
-  let mutationTimer;
-  const observer = new MutationObserver(() => {
-    clearTimeout(mutationTimer);
-    mutationTimer = setTimeout(() => {
-      createProxyButton();
-      hideFeedbackButtons();
-      if (autoPlayEnabled) {
-        triggerAutoPlayForExisting();
-      }
-    }, 150);
+  // Yield at the beginning of a manual interaction, before a held mouse press
+  // or keyboard activation has a chance to race the completion scan.
+  document.addEventListener('pointerdown', event => cancelForManualControl(buttonFrom(event)), true);
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && generating()) cancelPending();
+    if (event.key === 'Enter' || event.key === ' ') cancelForManualControl(buttonFrom(event));
+    if (event.key !== 'Enter' || event.repeat || event.isComposing ||
+        event.shiftKey || event.ctrlKey || event.altKey || event.metaKey ||
+        !(event.target instanceof Element) ||
+        !event.target.closest('textarea, [contenteditable="true"]')) return;
+    if (enabled(document.querySelector(SEND))) arm();
+  }, true);
+
+  document.addEventListener('play', event => {
+    if (event.target instanceof HTMLMediaElement) {
+      mediaInUse.add(event.target);
+      cancelPending();
+    }
+  }, true);
+  // A pause remains owned by the user/player. Only an actual end/reset releases it.
+  for (const type of ['ended', 'emptied']) {
+    document.addEventListener(type, event => mediaInUse.delete(event.target), true);
+  }
+  window.addEventListener('popstate', cancelPending);
+  window.addEventListener('pagehide', cancelPending);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') cancelPending();
   });
 
-  document.addEventListener('ended', (event) => {
-    const target = event.target;
-    if (target instanceof HTMLAudioElement) {
-      resetAllProxyButtons();
+  new MutationObserver(() => {
+    // Capture a new turn immediately; a short reply may finish before a timer.
+    if (pending && !pending.key) {
+      clearTimeout(scanTimer);
+      scan();
+    } else {
+      scheduleScan();
     }
-  }, true);
-
-  document.addEventListener('keydown', (event) => {
-    if (
-      event.key === 'Enter' &&
-      !event.shiftKey &&
-      !event.altKey &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      isInComposer(event.target)
-    ) {
-      armAutoPlayForNewResponses();
-    }
-  }, true);
-
-  document.addEventListener('pointerdown', (event) => {
-    if (isSendButton(event.target)) {
-      armAutoPlayForNewResponses();
-    }
-  }, true);
-
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.type === 'toggleAutoPlay') {
-      setAutoPlayEnabled(request.enabled);
-    }
-    setTimeout(hideFeedbackButtons, 500);
-  });
-
-  observer.observe(document.body, {
+  }).observe(document.body, {
     childList: true,
     subtree: true,
+    attributes: true,
+    attributeFilter: ['data-talvt-turn-state', 'data-turn-key', 'aria-label', 'aria-pressed', 'aria-disabled', 'disabled'],
   });
 
-  initializeAutoPlaySetting();
-  setTimeout(() => {
-    createProxyButton();
-    hideFeedbackButtons();
-  }, 500);
-
+  if (storage) {
+    storage.get({ [STORAGE_KEY]: false, [FEEDBACK_KEY]: false }, result => {
+      if (chrome.runtime?.lastError) return;
+      setAutoPlayEnabled(result[STORAGE_KEY]);
+      hideFeedbackEnabled = Boolean(result[FEEDBACK_KEY]);
+      scheduleScan();
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'sync') return;
+      if (Object.prototype.hasOwnProperty.call(changes, STORAGE_KEY)) {
+        setAutoPlayEnabled(changes[STORAGE_KEY].newValue);
+      }
+      if (Object.prototype.hasOwnProperty.call(changes, FEEDBACK_KEY)) {
+        hideFeedbackEnabled = Boolean(changes[FEEDBACK_KEY].newValue);
+        scheduleScan();
+      }
+    });
+  }
 })();
