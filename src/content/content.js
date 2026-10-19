@@ -11,7 +11,7 @@
   const STORAGE_KEY = 'autoPlayEnabled';
   const FEEDBACK_KEY = 'hideFeedbackButtonsEnabled';
   const DIAGNOSTICS_KEY = 'diagnosticsEnabled';
-  const VERSION = '1.2';
+  const VERSION = '1.3';
   const storage = typeof chrome !== 'undefined' ? chrome.storage?.sync : null;
   let autoPlayEnabled = false;
   let hideFeedbackEnabled = false;

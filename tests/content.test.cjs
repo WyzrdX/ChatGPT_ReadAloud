@@ -273,7 +273,7 @@ test('a delayed initial settings read never overwrites a newer autoplay toggle',
 
 test('startup and settings receipt identify the active version and loaded preference', async t => {
   const h = await setup(t);
-  assert.ok(h.logs.some(([event, data]) => event.includes('[ReadAloud 1.2] content-script-loaded') && data.storageAvailable));
+  assert.ok(h.logs.some(([event, data]) => event.includes('[ReadAloud 1.3] content-script-loaded') && data.storageAvailable));
   assert.ok(h.logs.some(([event, data]) => event.endsWith('settings-loaded') && data.autoPlayEnabled));
   assert.equal(h.logs.some(([event]) => event.endsWith('dom-snapshot')), false);
 });

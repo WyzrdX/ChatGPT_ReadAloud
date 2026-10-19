@@ -26,9 +26,9 @@ The extension requires an observed generation following a local submission. Repl
 
 ## Architecture and privacy
 
-The existing Manifest V3 content script, popup, and synchronized settings remain. The obsolete proxy-button/menu layer has been removed because ChatGPT now provides the speaker button itself.
+The existing Manifest V3 content script, popup, and synchronized settings remain. A toolbar-only service worker restores the state indicator on install, worker wake-up, and browser startup, and listens for synchronized preference changes. The obsolete proxy-button/menu layer has been removed because ChatGPT now provides the speaker button itself.
 
-The only extension permission is `storage`, used for the popup settings. The content script examines DOM control attributes and temporary turn identifiers. It does not read, store, log, or transmit conversation text. Diagnostic output contains only event names, counts, booleans, and a temporary request sequence number; it never includes conversation text, DOM identifiers, or URLs. It adds no network requests, analytics, external speech services, or background worker. ChatGPT itself makes the requests required by its native audio service.
+The only extension permission is `storage`, used for the popup settings. The content script examines DOM control attributes and temporary turn identifiers. It does not read, store, log, or transmit conversation text. Diagnostic output contains only event names, counts, booleans, and a temporary request sequence number; it never includes conversation text, DOM identifiers, or URLs. It adds no network requests, analytics, or external speech services. A small background service worker reflects the saved autoplay preference in the toolbar action. It does not access tabs, conversation DOM, or audio. ChatGPT itself makes the requests required by its native audio service.
 
 ## DOM contract
 
@@ -51,7 +51,7 @@ For development, use Node.js 18 or later, then run `npm ci` and `npm test`.
 
 The automated suite executes the actual content script against synthetic DOM fixtures using Node's test runner and jsdom. Fixtures reproduce the inspected turn/control attributes without conversation text. Tests cover completion timing, delayed and disabled controls, duplicates and remounts, historical mounts, sequential replies, settings, manual controls, media ownership, navigation, hidden tabs, IME input, failed submission expiry, and feedback styling. jsdom is a development dependency only and is not loaded by the extension.
 
-Live browser verification is separate: signed-in DOM attributes and the native speaker's transition to `Loading audio…` were observed. The modified extension has not been installed in that browser, and audible playback has not been verified. Automated fixtures do not establish live audio success.
+Live verification is separate: the user confirmed version 1.2 starts automatic playback successfully in Brave after enabling the autoplay setting. The earlier failure was reported to be caused by that setting being off. The new version 1.3 toolbar badge has automated coverage but still needs visual and restart verification in Brave.
 
 ### Live acceptance checks
 
@@ -66,12 +66,12 @@ ChatGPT's native audio availability and the browser's playback policy still appl
 
 ## Version 1.2 investigation and temporary diagnostics
 
-The user's Brave DevTools test verified that the native speaker selector and a programmatic page-console click work. Version 1.1 failed four added regression cases: a user turn mounted before Stop and completed with its speaker, a transient Stop control between scans, an in-place Stop-to-idle label change, and a delayed settings read overwriting a newer toggle. Version 1.2 fixes these reproduced defects. This does not establish which defect caused the reported Brave failure.
+The user's Brave DevTools test verified that the native speaker selector and a programmatic page-console click work. Version 1.1 failed four added regression cases: a user turn mounted before Stop and completed with its speaker, a transient Stop control between scans, an in-place Stop-to-idle label change, and a delayed settings read overwriting a newer toggle. Version 1.2 fixes these reproduced defects. The user subsequently confirmed version 1.2 works in Brave and reported the autoplay toggle had been disabled. The timing/settings regressions remain tested defensive fixes; they are not claimed as the cause of that configuration issue.
 
 ### Collect a focused Brave trace
 
-1. Check out the PR branch `fix/native-read-aloud` and reload the unpacked extension at `brave://extensions`. Confirm version **1.2**, then refresh the ChatGPT tab. Refreshing replaces the old content script; merely reloading the extension does not update an already open page.
-2. Open DevTools **Console**, enable **Info** messages, and filter for `ReadAloud`. On refresh, expect `[ReadAloud 1.2] content-script-loaded` and `settings-loaded`. If startup is absent, check the loaded extension directory, site access for `chatgpt.com`, enabled state, and extension errors. Version 1.1 messages/code indicate a stale tab or wrong directory.
+1. Check out the PR branch `fix/native-read-aloud` and reload the unpacked extension at `brave://extensions`. Confirm version **1.3**, then refresh the ChatGPT tab. Refreshing replaces the old content script; merely reloading the extension does not update an already open page.
+2. Open DevTools **Console**, enable **Info** messages, and filter for `ReadAloud`. On refresh, expect `[ReadAloud 1.3] content-script-loaded` and `settings-loaded`. If startup is absent, check the loaded extension directory, site access for `chatgpt.com`, enabled state, and extension errors. Version 1.1 messages/code indicate a stale tab or wrong directory.
 3. In the popup, enable **Auto-play new responses** and **Diagnostic logging (temporary)**. Expect `diagnostics-enabled`, with marker counts, and `autoplay-setting` with `enabled: true`. This verifies the storage-change listener in the active tab. Toggle diagnostic logging off after the investigation.
 4. Keep the tab visible, submit one short message, and wait for completion. Expect `submission-observed`, `response-bound`, `generation-observed`, `generation-complete`, `speaker-found`, `click-attempt`, and `click-dispatched`. Generation and binding can occur in either order. `click-observation` samples native control state after 300 ms; it is not proof of audible playback.
 5. If playback fails, share only the filtered `ReadAloud` lines for that submission. Do not paste full console output or conversation DOM. The last waiting/cancellation event identifies the gate that blocked the attempt.
@@ -96,6 +96,25 @@ The content script stays in the default **ISOLATED** world with only the existin
 
 `click-attempt` reports the isolated-world configuration and browser user-activation booleans. These can help investigate browser playback policy, but they do not prove the cause of a failure. A native label/pressed-state transition confirms only UI activity, not audible playback.
 
-Automated coverage is **36 passing Node/jsdom tests**, including content-script startup/settings, timing regressions, sanitized diagnostics, and actual popup preference reads/writes. The four new regression cases were also run against version 1.1 and failed there. Current read-only live inspection confirmed all three speaker buttons in the cloud test conversation were inside keyed, completed turns, had `aria-pressed="false"`, and lacked `data-testid`. This cloud DOM check does not verify Brave's ancestor markup.
+Automated coverage is **44 passing tests using Node, jsdom, and a mocked Chrome action/service-worker environment**, including content-script startup/settings, timing regressions, sanitized diagnostics, and actual popup preference reads/writes. The four new regression cases were also run against version 1.1 and failed there. Current read-only live inspection confirmed all three speaker buttons in the cloud test conversation were inside keyed, completed turns, had `aria-pressed="false"`, and lacked `data-testid`. This cloud DOM check does not verify Brave's ancestor markup.
 
-An actual Chromium extension-context test could not run because the browser download returned an invalid archive. No real isolated-world audio or live Brave extension playback is claimed. Run the trace above in Brave, followed by the manual-control/history acceptance checks, before marking the PR ready or merging it.
+An actual Chromium extension-context test could not run because the browser download returned an invalid archive. The user subsequently reported successful actual Brave autoplay with version 1.2 enabled. The toolbar indicator itself has not been verified in live Brave. The cloud DOM inspection and automated tests do not replace that visual/restart check.
+
+## Version 1.3 toolbar indicator
+
+- **Auto Read Aloud ON:** the existing speaker icon carries a green **ON** badge with white text.
+- **Auto Read Aloud OFF:** the badge is cleared, leaving the original, unhighlighted icon.
+- Hover text explicitly states **Auto Read Aloud ON** or **OFF**.
+
+The saved `autoPlayEnabled` preference is the sole source of truth. The service worker uses `chrome.action` badge/title APIs, listens for `chrome.storage.onChanged`, and restores state at worker load, extension install/update, and browser startup. No new permissions are required. Updates are serialized, and delayed startup reads cannot overwrite newer toggle changes. The badge indicates the saved preference, not whether a response is currently playing or whether the extension has site access.
+
+The speaker artwork and popup/playback functionality are preserved. A badge was chosen instead of replacement icon assets so the existing design stays intact. Eight worker tests cover the OFF default, saved ON state, startup and install/update restoration, immediate changes, unrelated settings, stale reads, ordered updates under slow/failing APIs, and storage errors. Existing response-history, duplicate prevention, and manual playback tests also pass; the only content-script change from 1.2 is the version label.
+
+### Live Brave indicator check
+
+1. Update the existing PR branch, reload the unpacked extension at `brave://extensions`, and confirm version **1.3**. Refresh ChatGPT once.
+2. Pin the extension if needed. Turn **Auto-play new responses** ON and confirm the green **ON** badge and ON hover text. Turn it OFF and confirm the badge clears and hover text says OFF.
+3. Leave autoplay ON, close and reopen Brave, and confirm the badge is restored before opening the popup. Repeat with autoplay OFF.
+4. With autoplay ON, send a new message and confirm playback. Open an existing conversation and toggle OFF/ON without submitting: verify no historical playback. Use native pause/stop and verify it is respected, with no duplicate restart.
+
+The PR remains unmerged pending owner approval.
