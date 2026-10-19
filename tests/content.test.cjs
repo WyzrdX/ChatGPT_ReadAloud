@@ -14,7 +14,7 @@ function turn(key, complete = false, speaker = complete) {
   </div></div>`;
 }
 
-async function setup(t, { enabled = true, initial = turn('old', true), path = '/c/test', deferredStorage = false } = {}) {
+async function setup(t, { enabled = true, initial = turn('old', true), path = '/c/test', deferredStorage = false, diagnostics = false, storageError = false } = {}) {
   const dom = new JSDOM(`<main><div id="turns">${initial}</div>
     <div contenteditable="true" id="composer"></div><button aria-label="Send"></button>
     <button aria-label="More actions"></button></main>`, {
@@ -23,9 +23,11 @@ async function setup(t, { enabled = true, initial = turn('old', true), path = '/
   const { window: w } = dom;
   const d = w.document;
   t.after(() => { w.dispatchEvent(new w.Event('pagehide')); w.close(); });
+  const logs = [];
+  w.console.info = (...args) => logs.push(args);
   let changed, getSettings;
-  w.chrome = { runtime: {}, storage: {
-    sync: { get(defaults, callback) { getSettings = () => callback({ ...defaults, autoPlayEnabled: enabled }); if (!deferredStorage) getSettings(); } },
+  w.chrome = { runtime: storageError ? { lastError: { message: 'storage failure' } } : {}, storage: {
+    sync: { get(defaults, callback) { getSettings = () => callback({ ...defaults, autoPlayEnabled: enabled, diagnosticsEnabled: diagnostics }); if (!deferredStorage) getSettings(); } },
     onChanged: { addListener(callback) { changed = callback; } },
   } };
   let now = 0;
@@ -46,7 +48,7 @@ async function setup(t, { enabled = true, initial = turn('old', true), path = '/
     await Promise.resolve();
   }
   const h = {
-    w, d, clicks, flush,
+    w, d, clicks, logs, flush,
     loadSettings: () => getSettings(),
     setting(value, key = 'autoPlayEnabled') { changed({ [key]: { newValue: value } }, 'sync'); },
     send() { d.querySelector('[aria-label="Send"]').click(); },
@@ -232,4 +234,81 @@ test('pointer and keyboard intent yield to manual playback before click activati
   h.send(); await h.start('next');
   h.speaker('old').dispatchEvent(new h.w.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
   await h.finish('next'); assert.equal(h.plays(), 0);
+});
+
+test('binds a new user turn before Stop mounts, even if completion mounts with its speaker', async t => {
+  const h = await setup(t); h.send();
+  h.d.querySelector('#turns').insertAdjacentHTML('beforeend', turn('new')); await h.flush();
+  assert.equal(h.plays(), 0);
+  const stop = h.d.createElement('button'); stop.id = 'stop'; stop.setAttribute('aria-label', 'Stop'); h.d.body.append(stop);
+  h.d.querySelector('[data-turn-key="new"]').outerHTML = turn('new', true); await h.flush();
+  assert.equal(h.plays(), 0);
+  stop.remove(); await h.flush(); assert.equal(h.plays(), 1);
+});
+
+test('recognizes a generation Stop mounted and removed between scans', async t => {
+  const h = await setup(t); h.send();
+  h.d.querySelector('#turns').insertAdjacentHTML('beforeend', turn('new')); await h.flush();
+  const stop = h.d.createElement('button'); stop.setAttribute('aria-label', 'Stop'); h.d.body.append(stop); stop.remove();
+  await h.finish(); assert.equal(h.plays(), 1);
+});
+
+test('recognizes an in-place Stop-to-idle label change between scans', async t => {
+  const h = await setup(t); h.send();
+  h.d.querySelector('#turns').insertAdjacentHTML('beforeend', turn('new')); await h.flush();
+  const send = h.d.querySelector('[aria-label="Send"]'); send.setAttribute('aria-label', 'Stop'); send.setAttribute('aria-label', 'Start Voice');
+  await h.finish(); assert.equal(h.plays(), 1);
+});
+
+test('an old Stop removal queued before submission cannot authorize another reply', async t => {
+  const h = await setup(t); const stop = h.d.createElement('button'); stop.setAttribute('aria-label', 'Stop'); h.d.body.append(stop); stop.remove();
+  h.send(); h.d.querySelector('#turns').insertAdjacentHTML('beforeend', turn('new')); await h.flush();
+  await h.finish(); assert.equal(h.plays(), 0);
+});
+
+test('a delayed initial settings read never overwrites a newer autoplay toggle', async t => {
+  const h = await setup(t, { enabled: false, deferredStorage: true });
+  h.setting(true); h.loadSettings(); h.send(); await h.start(); await h.finish(); assert.equal(h.plays(), 1);
+});
+
+test('startup and settings receipt identify the active version and loaded preference', async t => {
+  const h = await setup(t);
+  assert.ok(h.logs.some(([event, data]) => event.includes('[ReadAloud 1.2] content-script-loaded') && data.storageAvailable));
+  assert.ok(h.logs.some(([event, data]) => event.endsWith('settings-loaded') && data.autoPlayEnabled));
+  assert.equal(h.logs.some(([event]) => event.endsWith('dom-snapshot')), false);
+});
+
+test('settings errors remain disabled and produce an explicit diagnostic', async t => {
+  const h = await setup(t, { storageError: true }); h.send(); await h.start(); await h.finish(); assert.equal(h.plays(), 0);
+  assert.ok(h.logs.some(([event]) => event.endsWith('settings-read-failed')));
+});
+
+test('diagnostics trace scoped response detection and clicks without text, IDs, or URLs', async t => {
+  const h = await setup(t, { diagnostics: true });
+  h.d.querySelector('#composer').textContent = 'PRIVATE_TEST_TEXT';
+  h.send(); await h.start('PRIVATE_MESSAGE_ID'); await h.finish('PRIVATE_MESSAGE_ID'); await h.flush(400);
+  for (const event of ['submission-observed', 'response-bound', 'generation-observed', 'generation-complete', 'speaker-found', 'click-attempt', 'click-dispatched', 'click-observation']) {
+    assert.ok(h.logs.some(([label]) => label.endsWith(event)), event);
+  }
+  assert.equal(h.plays(), 1);
+  const serialized = JSON.stringify(h.logs);
+  assert.equal(/PRIVATE_|https:|\/c\/test/.test(serialized), false);
+  h.setting(false, 'diagnosticsEnabled'); const count = h.logs.length;
+  h.send(); await h.start('next'); await h.finish('next'); assert.equal(h.logs.length, count);
+});
+
+test('unsupported turn markup reports speaker and marker counts without a global click fallback', async t => {
+  const h = await setup(t, { diagnostics: true, initial: '<button aria-label="Read aloud" aria-pressed="false"></button>' });
+  h.send(); await h.start(); h.d.querySelector('[data-turn-key="new"]').remove(); await h.flush();
+  const snapshot = h.logs.find(([event]) => event.endsWith('dom-snapshot'))[1];
+  assert.equal(snapshot.turnCount, 0); assert.equal(snapshot.speakerCount, 1); assert.equal(h.plays(), 0);
+});
+
+test('a thrown click is logged and not retried on subsequent mutations', async t => {
+  const h = await setup(t, { diagnostics: true }); h.send(); await h.start(); await h.finish('new', false);
+  const speaker = h.d.createElement('button'); speaker.setAttribute('aria-label', 'Read aloud');
+  let attempts = 0; speaker.click = () => { attempts++; throw new Error('not logged'); };
+  h.d.querySelector('[data-turn-key="new"] [data-talvt-turn-state]').append(speaker); await h.flush();
+  speaker.setAttribute('disabled', ''); speaker.removeAttribute('disabled'); await h.flush();
+  assert.equal(attempts, 1); assert.ok(h.logs.some(([event]) => event.endsWith('click-threw')));
 });

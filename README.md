@@ -28,7 +28,7 @@ The extension requires an observed generation following a local submission. Repl
 
 The existing Manifest V3 content script, popup, and synchronized settings remain. The obsolete proxy-button/menu layer has been removed because ChatGPT now provides the speaker button itself.
 
-The only extension permission is `storage`, used for the two settings. The content script examines DOM control attributes and temporary turn identifiers. It does not read, store, log, or transmit conversation text. It adds no network requests, analytics, external speech services, or background worker. ChatGPT itself makes the requests required by its native audio service.
+The only extension permission is `storage`, used for the popup settings. The content script examines DOM control attributes and temporary turn identifiers. It does not read, store, log, or transmit conversation text. Diagnostic output contains only event names, counts, booleans, and a temporary request sequence number; it never includes conversation text, DOM identifiers, or URLs. It adds no network requests, analytics, external speech services, or background worker. ChatGPT itself makes the requests required by its native audio service.
 
 ## DOM contract
 
@@ -41,7 +41,7 @@ The signed-in ChatGPT interface was inspected on 2026-10-19:
 - Completion marker: `[data-talvt-turn-state="complete"]`.
 - Composer controls: `button[aria-label="Send"]` and `button[aria-label="Stop"]`.
 
-The completion marker was also present while a new request was starting. It is therefore insufficient by itself. Playback requires a bound new turn, the assistant marker, the completion marker, an enabled native speaker button, and no generation Stop button. The script never uses icon paths, positional button indexes, or More actions as a fallback.
+The completion marker was also present while a new request was starting. It is therefore insufficient by itself. Turn binding and generation observation are recorded independently because those controls can render in separate batches. Stop removals and old labels are observed so a short generation is not lost between scans. Playback requires a bound new turn, the assistant marker, the completion marker, an enabled native speaker button, and no generation Stop button. The script never uses icon paths, positional button indexes, or More actions as a fallback.
 
 These are private UI attributes and may change. If they disappear, autoplay fails closed instead of opening another action. The older `chat.openai.com` host match is retained for redirected tabs; the obsolete menu interface is not supported.
 
@@ -63,3 +63,39 @@ Live browser verification is separate: signed-in DOM attributes and the native s
 6. Repeat from New chat and inside an existing chat. Check both Send and Enter submission.
 
 ChatGPT's native audio availability and the browser's playback policy still apply. The extension does not bypass either.
+
+## Version 1.2 investigation and temporary diagnostics
+
+The user's Brave DevTools test verified that the native speaker selector and a programmatic page-console click work. Version 1.1 failed four added regression cases: a user turn mounted before Stop and completed with its speaker, a transient Stop control between scans, an in-place Stop-to-idle label change, and a delayed settings read overwriting a newer toggle. Version 1.2 fixes these reproduced defects. This does not establish which defect caused the reported Brave failure.
+
+### Collect a focused Brave trace
+
+1. Check out the PR branch `fix/native-read-aloud` and reload the unpacked extension at `brave://extensions`. Confirm version **1.2**, then refresh the ChatGPT tab. Refreshing replaces the old content script; merely reloading the extension does not update an already open page.
+2. Open DevTools **Console**, enable **Info** messages, and filter for `ReadAloud`. On refresh, expect `[ReadAloud 1.2] content-script-loaded` and `settings-loaded`. If startup is absent, check the loaded extension directory, site access for `chatgpt.com`, enabled state, and extension errors. Version 1.1 messages/code indicate a stale tab or wrong directory.
+3. In the popup, enable **Auto-play new responses** and **Diagnostic logging (temporary)**. Expect `diagnostics-enabled`, with marker counts, and `autoplay-setting` with `enabled: true`. This verifies the storage-change listener in the active tab. Toggle diagnostic logging off after the investigation.
+4. Keep the tab visible, submit one short message, and wait for completion. Expect `submission-observed`, `response-bound`, `generation-observed`, `generation-complete`, `speaker-found`, `click-attempt`, and `click-dispatched`. Generation and binding can occur in either order. `click-observation` samples native control state after 300 ms; it is not proof of audible playback.
+5. If playback fails, share only the filtered `ReadAloud` lines for that submission. Do not paste full console output or conversation DOM. The last waiting/cancellation event identifies the gate that blocked the attempt.
+
+| Last event or finding | Meaning / next check |
+| --- | --- |
+| No `content-script-loaded` after refresh | Content script not active, site access blocked, stale tab, or wrong extension folder. |
+| `settings-read-failed` / `settings-unavailable` | Extension storage could not be read; autoplay stays off. |
+| `settings-loaded` with `autoPlayEnabled: false` | The active extension instance has autoplay disabled. |
+| No `submission-observed` after Send | Submission control/input detection needs comparison with Brave's actual DOM. |
+| `waiting-new-turn`, `turnCount: 0`, but `speakerCount > 0` | Speaker selector works, but Brave lacks the inspected turn markup; collect structural attributes before changing selectors. |
+| `waiting-generation-evidence` | New turn bound, but no supported generation Stop control observed. |
+| `waiting-assistant-completion` | Bound turn lacks the inspected assistant/completion markers. |
+| `waiting-speaker` | Completion detected, but no native speaker inside that specific response. Global speaker count is diagnostic only, never a fallback click target. |
+| `request-finished` | Reason explains cancellation or that the one click attempt was consumed. |
+| `click-threw` | DOM click threw; no automatic retry. |
+| `click-dispatched` without playback | Detection reached the click. Investigate native player behavior, browser audio policy, and execution context in Brave. |
+
+### Execution context and verification limits
+
+The content script stays in the default **ISOLATED** world with only the existing `storage` permission. [Chrome's content-script documentation](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) states that the page and content script share the DOM despite separate JavaScript environments. A DOM click is therefore a reasonable first approach; a successful page-console click alone does not prove the extension click will start audio. No MAIN-world bridge, script injection, audio-policy bypass, or additional permissions have been introduced without evidence that they are needed.
+
+`click-attempt` reports the isolated-world configuration and browser user-activation booleans. These can help investigate browser playback policy, but they do not prove the cause of a failure. A native label/pressed-state transition confirms only UI activity, not audible playback.
+
+Automated coverage is **36 passing Node/jsdom tests**, including content-script startup/settings, timing regressions, sanitized diagnostics, and actual popup preference reads/writes. The four new regression cases were also run against version 1.1 and failed there. Current read-only live inspection confirmed all three speaker buttons in the cloud test conversation were inside keyed, completed turns, had `aria-pressed="false"`, and lacked `data-testid`. This cloud DOM check does not verify Brave's ancestor markup.
+
+An actual Chromium extension-context test could not run because the browser download returned an invalid archive. No real isolated-world audio or live Brave extension playback is claimed. Run the trace above in Brave, followed by the manual-control/history acceptance checks, before marking the PR ready or merging it.
